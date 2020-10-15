@@ -3,7 +3,6 @@ package flow
 import (
 	"reflect"
 	"sync"
-	"sync/atomic"
 )
 
 // DefaultBufferSize is the default channel buffer capacity.
@@ -94,7 +93,9 @@ type Graph struct {
 	// ready is used to let the outside world know when the net is ready to accept input
 	ready chan struct{}
 	// isRunning indicates that the network is currently running
-	isRunning int32
+	running bool
+
+	mu sync.RWMutex
 }
 
 // InitGraphState method initializes graph fields and allocates memory.
@@ -463,7 +464,9 @@ func unsetProcPort(proc interface{}, portName string, isOut bool) bool {
 	if !ch.IsValid() {
 		return false
 	}
+	mtx.Lock()
 	ch.Set(reflect.Zero(ch.Type()))
+	mtx.Unlock()
 	return true
 }
 
@@ -649,8 +652,9 @@ func (n *Graph) run() {
 			RunProc(v)
 		}
 	}
-
-	atomic.StoreInt32(&n.isRunning, 1)
+	n.mu.Lock()
+	n.running = true
+	n.mu.Unlock()
 
 	// Send initial IPs
 	for _, ip := range n.iips {
@@ -737,7 +741,10 @@ func (n *Graph) run() {
 
 	// Wait for all processes to terminate
 	n.waitGrp.Wait()
-	atomic.StoreInt32(&n.isRunning, 1)
+
+	n.mu.Lock()
+	n.running = false
+	n.mu.Unlock()
 	// Check if there is a parent net
 	if n.Net != nil {
 		// Notify parent of finish
@@ -745,11 +752,18 @@ func (n *Graph) run() {
 	}
 }
 
+func (n *Graph) isRunning() bool {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	return n.running
+}
+
 // RunProc starts a proc added to a net at run time
 func (n *Graph) RunProc(procName string) bool {
-	if atomic.LoadInt32(&n.isRunning) == 1 {
+	if !n.isRunning()  {
 		return false
 	}
+
 	proc, ok := n.procs[procName]
 	if !ok {
 		return false
@@ -770,9 +784,10 @@ func (n *Graph) RunProc(procName string) bool {
 
 // Stop terminates the network without closing any connections
 func (n *Graph) Stop() {
-	if atomic.LoadInt32(&n.isRunning) == 1 {
+	if !n.isRunning()  {
 		return
 	}
+
 	for _, v := range n.procs {
 		// Check if it is a net or proc
 		r := reflect.ValueOf(v).Elem()
@@ -790,9 +805,10 @@ func (n *Graph) Stop() {
 
 // StopProc stops a specific process in the net
 func (n *Graph) StopProc(procName string) bool {
-	if atomic.LoadInt32(&n.isRunning) == 1 {
+	if !n.isRunning() {
 		return false
 	}
+
 	proc, ok := n.procs[procName]
 	if !ok {
 		return false

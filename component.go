@@ -65,9 +65,13 @@ type portHandler struct {
 	onClose reflect.Value
 }
 
+var mtx sync.RWMutex
+
+
 // RunProc runs event handling loop on component ports.
 // It returns true on success or panics with error message and returns false on error.
 func RunProc(c interface{}) bool {
+
 	// Check if passed interface is a valid pointer to struct
 	v := reflect.ValueOf(c)
 	if v.Kind() != reflect.Ptr || v.IsNil() {
@@ -179,6 +183,9 @@ func RunProc(c interface{}) bool {
 		inputsClose.Done()
 	}
 	terminate := func() {
+		mtx.Lock()
+		defer mtx.Unlock()
+
 		if !vCom.FieldByName("IsRunning").Bool() {
 			return
 		}
@@ -232,6 +239,8 @@ func RunProc(c interface{}) bool {
 			if finable, ok := c.(Finalizable); ok {
 				finable.Finish()
 			}
+			mtx.RLock()
+			defer mtx.RUnlock()
 			// Close all output ports if the process is still running
 			if vCom.FieldByName("IsRunning").Bool() {
 				closePorts()
@@ -321,7 +330,10 @@ func RunProc(c interface{}) bool {
 
 	// Indicate the process as running
 	<-handlersEst
+
+	mtx.Lock()
 	vCom.FieldByName("IsRunning").SetBool(true)
+	mtx.Unlock()
 
 	go func() {
 		// Wait for all inputs to be closed
