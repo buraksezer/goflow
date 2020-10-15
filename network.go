@@ -3,6 +3,7 @@ package flow
 import (
 	"reflect"
 	"sync"
+	"sync/atomic"
 )
 
 // DefaultBufferSize is the default channel buffer capacity.
@@ -93,7 +94,7 @@ type Graph struct {
 	// ready is used to let the outside world know when the net is ready to accept input
 	ready chan struct{}
 	// isRunning indicates that the network is currently running
-	isRunning bool
+	isRunning int32
 }
 
 // InitGraphState method initializes graph fields and allocates memory.
@@ -648,7 +649,8 @@ func (n *Graph) run() {
 			RunProc(v)
 		}
 	}
-	n.isRunning = true
+
+	atomic.StoreInt32(&n.isRunning, 1)
 
 	// Send initial IPs
 	for _, ip := range n.iips {
@@ -735,7 +737,7 @@ func (n *Graph) run() {
 
 	// Wait for all processes to terminate
 	n.waitGrp.Wait()
-	n.isRunning = false
+	atomic.StoreInt32(&n.isRunning, 1)
 	// Check if there is a parent net
 	if n.Net != nil {
 		// Notify parent of finish
@@ -745,7 +747,7 @@ func (n *Graph) run() {
 
 // RunProc starts a proc added to a net at run time
 func (n *Graph) RunProc(procName string) bool {
-	if !n.isRunning {
+	if atomic.LoadInt32(&n.isRunning) == 1 {
 		return false
 	}
 	proc, ok := n.procs[procName]
@@ -768,7 +770,7 @@ func (n *Graph) RunProc(procName string) bool {
 
 // Stop terminates the network without closing any connections
 func (n *Graph) Stop() {
-	if !n.isRunning {
+	if atomic.LoadInt32(&n.isRunning) == 1 {
 		return
 	}
 	for _, v := range n.procs {
@@ -788,7 +790,7 @@ func (n *Graph) Stop() {
 
 // StopProc stops a specific process in the net
 func (n *Graph) StopProc(procName string) bool {
-	if !n.isRunning {
+	if atomic.LoadInt32(&n.isRunning) == 1 {
 		return false
 	}
 	proc, ok := n.procs[procName]
